@@ -1431,6 +1431,8 @@ loop(void)
     fd_set rdset, wrset;
     int r, n;
     int stdin_closed;
+    char buff_rd[STI_RD_SZ>TTY_RD_SZ?STI_RD_SZ:TTY_RD_SZ];
+    char buff_map[TTY_RD_SZ * M_MAXMAP];
 
     state = ST_TRANSPARENT;
     if ( ! opts.exit )
@@ -1473,12 +1475,11 @@ loop(void)
 
         if ( FD_ISSET(STI, &rdset) ) {
             /* read from terminal */
-            char buff_rd[STI_RD_SZ];
             int i;
             unsigned char c;
 
             do {
-                n = read(STI, buff_rd, sizeof(buff_rd));
+                n = read(STI, buff_rd, STI_RD_SZ);
             } while (n < 0 && errno == EINTR);
             if (n == 0) {
                 stdin_closed = 1;
@@ -1525,13 +1526,10 @@ loop(void)
 
         if ( FD_ISSET(tty_fd, &rdset) ) {
 
-            char buff_rd[TTY_RD_SZ];
-            char buff_map[TTY_RD_SZ * M_MAXMAP];
-
             /* read from port */
 
             do {
-                n = read(tty_fd, &buff_rd, sizeof(buff_rd));
+                n = read(tty_fd, &buff_rd, TTY_RD_SZ);
             } while (n < 0 && errno == EINTR);
             if (n == 0) {
                 fatal("read zero bytes from port");
