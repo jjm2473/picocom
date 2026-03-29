@@ -218,6 +218,7 @@ struct {
     int raise_dtr;
     int quiet;
     struct timespec txdelay;
+    struct timespec line_delay;
 } opts = {
     .port = NULL,
     .baud = 9600,
@@ -249,6 +250,7 @@ struct {
     .raise_dtr = 0,
     .quiet = 0,
     .txdelay = { 0, 0 },
+    .line_delay = { 0, 0 },
 };
 
 int sig_exit = 0;
@@ -1402,6 +1404,23 @@ enum le_reason {
     LE_SIGNAL
 };
 
+void *next_newline(void *p, int sz)
+{
+    void *nn = memchr(p, '\n', sz);
+    void *nr = memchr(p, '\r', sz);
+    if ( nn && nr ) {
+        if (nn - nr == 1)
+            return nn;
+        return (nn < nr) ? nn : nr;
+    } else if ( nn ) {
+        return nn;
+    } else if ( nr ) {
+        return nr;
+    } else {
+        return NULL;
+    }
+}
+
 enum le_reason
 loop(void)
 {
@@ -1543,6 +1562,12 @@ loop(void)
                 sz = 1;
             } else {
                 sz = (tty_q.len < tty_write_sz) ? tty_q.len : tty_write_sz;
+                if (opts.line_delay.tv_nsec) {
+                    unsigned char *nl = next_newline(tty_q.buff, sz);
+                    if (nl) {
+                        sz = nl + 1 - tty_q.buff;
+                    }
+                }
             }
             do {
                 n = write(tty_fd, tty_q.buff, sz);
@@ -1552,7 +1577,9 @@ loop(void)
             if ( opts.lecho && opts.log_filename )
                 if ( writen_ni(log_fd, tty_q.buff, n) < n )
                     fatal("write to logfile failed: %s", strerror(errno));
-            if (opts.txdelay.tv_nsec)
+            if (opts.line_delay.tv_nsec && (tty_q.buff[n-1] == '\r' || tty_q.buff[n-1] == '\n')) {
+                nanosleep(&opts.line_delay, NULL);
+            } else if (opts.txdelay.tv_nsec)
                 nanosleep(&opts.txdelay, NULL);
             memmove(tty_q.buff, tty_q.buff + n, tty_q.len - n);
             tty_q.len -= n;
@@ -1638,6 +1665,7 @@ show_usage(char *name)
     printf("  --<d>atabits 5 | 6 | 7 | 8\n");
     printf("  --sto<p>bits 1 | 2\n");
     printf("  --<T>x-delay <nsec>\n");
+    printf("  --<L>ine-delay <nsec>\n");
     printf("  --<e>scape <char>\n");
     printf("  --<n>o-escape\n");
     printf("  --e<c>ho\n");
@@ -1718,6 +1746,7 @@ parse_args(int argc, char *argv[])
         {"raise-rts", no_argument, 0, 3},
         {"raise-dtr", no_argument, 0, 4},
         {"tx-delay", required_argument, 0, 'T'},
+        {"line-delay", required_argument, 0, 'L'},
         {"quiet", no_argument, 0, 'q'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -1733,7 +1762,7 @@ parse_args(int argc, char *argv[])
         /* no default error messages printed. */
         opterr = 0;
 
-        c = getopt_long(argc, argv, "hirulcqXnv:s:r:e:f:b:y:d:p:g:t:x:T:",
+        c = getopt_long(argc, argv, "hirulcqXnv:s:r:e:f:b:y:d:p:g:t:x:T:L:",
                         longOptions, &optionIndex);
 
         if (c < 0)
@@ -1904,6 +1933,15 @@ parse_args(int argc, char *argv[])
                 r = -1;
             }
             break;
+        case 'L':
+            opts.line_delay.tv_nsec = strtol(optarg, &ep, 10);
+
+            /* Limit to 1 second */
+            if (!ep || *ep != '\0' || opts.line_delay.tv_nsec < 0 || opts.line_delay.tv_nsec >= 1000000000) {
+                fprintf(stderr, "Invalid --line-delay (must be between 0 and 999999999): %s\n", optarg);
+                r = -1;
+            }
+            break;
         case 'x':
             opts.exit_after = strtol(optarg, &ep, 10);
             if ( ! ep || *ep != '\0' || opts.exit_after < 0 ) {
@@ -1977,6 +2015,7 @@ parse_args(int argc, char *argv[])
     printf("databits are   : %d\n", opts.databits);
     printf("stopbits are   : %d\n", opts.stopbits);
     printf("txdelay is     : %ld ns\r\n", opts.txdelay.tv_nsec);
+    printf("linedelay is   : %ld ns\r\n", opts.line_delay.tv_nsec);
     if ( opts.noescape ) {
         printf("escape is      : none\n");
     } else {
